@@ -490,15 +490,15 @@ tfoot td{font-weight:700;background:var(--surface2);border-top:1px solid var(--l
     <div class="nota" style="margin-top:-8px">GARDEN · SPE Garden Silva Lobo LTDA</div>
     <h2 id="loginTit">Carregando…</h2>
     <p class="login-msg" id="loginMsg" hidden></p>
-    <label class="campo" id="lEmail">E-mail<input type="email" id="liEmail" autocomplete="username" inputmode="email"></label>
-    <label class="campo" id="lSenha">Senha<input type="password" id="liSenha" autocomplete="current-password"></label>
-    <label class="campo" id="lSenha2">Repita a senha<input type="password" id="liSenha2" autocomplete="new-password"></label>
-    <button class="btn pri" type="submit" id="liBtn">Entrar</button>
+    <label class="campo" id="lEmail" hidden>E-mail<input type="email" id="liEmail" autocomplete="username" inputmode="email"></label>
+    <label class="campo" id="lSenha" hidden>Senha<input type="password" id="liSenha" autocomplete="current-password"></label>
+    <label class="campo" id="lSenha2" hidden>Repita a senha<input type="password" id="liSenha2" autocomplete="new-password"></label>
+    <button class="btn pri" type="submit" id="liBtn" hidden>Entrar</button>
     <div class="login-links">
-      <button type="button" class="link" data-modo="criar">Primeiro acesso: criar minha senha</button>
-      <button type="button" class="link" data-modo="esqueci">Esqueci a senha</button>
-      <button type="button" class="link" data-modo="entrar">Voltar para entrar</button>
-      <button type="button" class="link" id="liSair">Sair desta conta</button>
+      <button type="button" class="link" data-modo="criar" hidden>Primeiro acesso: criar minha senha</button>
+      <button type="button" class="link" data-modo="esqueci" hidden>Esqueci a senha</button>
+      <button type="button" class="link" data-modo="entrar" hidden>Voltar para entrar</button>
+      <button type="button" class="link" id="liSair" hidden>Sair desta conta</button>
     </div>
   </form>
 </div>
@@ -1348,11 +1348,14 @@ $("importArq").addEventListener("change",async e=>{const f=e.target.files&&e.tar
   finally{$("importBtn").disabled=false;}});
 
 // ---------- início ----------
+function comPrazo(p,ms){return Promise.race([p,new Promise((_,rej)=>setTimeout(()=>rej(new Error("tempo esgotado")),ms))]);}
 async function iniciar(session){
   if(!session||iniciado)return;iniciado=true;
   mostrarLogin("carregando");
   const email=(session.user&&session.user.email||"").toLowerCase();
-  const {data:pap,error}=await sb.rpc("meu_papel");
+  let pap=null,error=null;
+  try{const r=await comPrazo(sb.rpc("meu_papel"),15000);pap=r.data;error=r.error;}catch(x){error={message:"tempo esgotado"};}
+  if(error){iniciado=false;}
   if(error){mostrarLogin("sem","Não foi possível verificar o seu acesso. Recarregue a página. ("+error.message+")","erro");return;}
   if(!pap){mostrarLogin("sem","O e-mail "+email+" ainda não tem acesso a este diário. Peça ao responsável pela obra para liberar e depois recarregue a página.");return;}
   PAPEL=pap;LEITURA=PAPEL==="leitor";
@@ -1376,15 +1379,17 @@ async function iniciar(session){
 }
 (async()=>{
   if(!window.supabase){mostrarLogin("sem","Não foi possível carregar o sistema. Verifique a internet e recarregue a página.","erro");return;}
-  sb=window.supabase.createClient(SUPA_URL,SUPA_KEY,{auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:true}});
+  sb=window.supabase.createClient(SUPA_URL,SUPA_KEY,{auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:true,lock:async(_n,_t,fn)=>await fn()}});
   let recuperando=/type=recovery/.test(location.hash);
   sb.auth.onAuthStateChange((ev,ses)=>{
     if(ev==="PASSWORD_RECOVERY"){recuperando=true;mostrarLogin("nova","Digite a nova senha duas vezes.");return;}
     if(ev==="SIGNED_IN"&&ses&&!recuperando)setTimeout(()=>iniciar(ses),0);
   });
-  const {data:{session}}=await sb.auth.getSession();
+  let session=null;
+  try{const r=await comPrazo(sb.auth.getSession(),10000);session=r&&r.data&&r.data.session;}
+  catch(x){if(!iniciado)mostrarLogin("entrar","A conexão demorou para responder. Entre com seu e-mail e senha.","erro");return;}
   if(recuperando)return;
-  if(session)iniciar(session);else mostrarLogin("entrar");
+  if(session)iniciar(session);else if(!iniciado)mostrarLogin("entrar");
 })();
 })();
 </script>
