@@ -10,10 +10,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600;700&display=swap">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/dist/umd/supabase.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/dist/umd/supabase.js"></script>
 <style>
 /* Layout: faixa de cabeçalho em azul-aço + abas; cada aba é uma ferramenta de trabalho em tela cheia, painéis lado a lado no computador e empilhados no celular */
 :root{
@@ -719,7 +716,7 @@ $("relBaixar").addEventListener("click",async()=>{if(!downloads){toast("Esta vis
 
 // ---------- relatório do dia em PDF ----------
 async function gerarPDF(s){
-  const J=window.jspdf;
+  await carregarExtras();const J=window.jspdf;
   if(!J||!J.jsPDF){toast("O gerador de PDF não carregou. Recarregue a página e tente de novo.");return;}
   if(!downloads){toast("Esta visualização não permite baixar arquivos.");return;}
   const doc=new J.jsPDF({unit:"mm",format:"a4"});
@@ -790,7 +787,7 @@ $("relPdf").addEventListener("click",()=>gerarPDF(S.dia));
 
 // ---------- presença do mês em PDF ----------
 async function gerarPdfMes(){
-  const J=window.jspdf;
+  await carregarExtras();const J=window.jspdf;
   if(!J||!J.jsPDF){toast("O gerador de PDF não carregou. Recarregue a página e tente de novo.");return;}
   if(!downloads){toast("Esta visualização não permite baixar arquivos.");return;}
   const doc=new J.jsPDF({unit:"mm",format:"a4",orientation:"landscape"});
@@ -1193,7 +1190,7 @@ $("obraForm").addEventListener("submit",async e=>{e.preventDefault();
 
 // ---------- EXCEL ----------
 async function salvarXlsx(nome,abas){
-  if(typeof XLSX==="undefined"){toast("O gerador de Excel não carregou. Recarregue a página.");return;}
+  await carregarExtras();if(typeof XLSX==="undefined"){toast("O gerador de Excel não carregou. Recarregue a página.");return;}
   if(!downloads){toast("Esta visualização não permite baixar arquivos.");return;}
   const wb=XLSX.utils.book_new();
   abas.forEach(([t,aoa,larg])=>{const ws=XLSX.utils.aoa_to_sheet(aoa);if(larg)ws["!cols"]=larg.map(w=>({wch:w}));XLSX.utils.book_append_sheet(wb,ws,t);});
@@ -1236,17 +1233,21 @@ let sb=null, PAPEL=null, iniciado=false;
 const clone=o=>o===undefined?undefined:JSON.parse(JSON.stringify(o));
 
 // Mesma interface do banco anterior: doc(path) e collection(nome), com atualização ao vivo.
-function criarDb(){
-  const cache={}, ouvCol={}, ouvDoc={};
+function criarDb(inicial){
+  const cache=Object.assign({},inicial||{}), ouvCol={}, ouvDoc={};
   const colDe=p=>p.split("/")[0];
   function snapCol(col){return {docs:Object.keys(cache).filter(p=>colDe(p)===col&&p.split("/").length===2).map(p=>({id:p.split("/")[1],data:()=>clone(cache[p])}))};}
   function snapDoc(path){const d=cache[path];return {exists:d!==undefined,data:()=>clone(d)};}
   function avisar(path){const col=colDe(path);(ouvCol[col]||[]).forEach(f=>f(snapCol(col)));(ouvDoc[path]||[]).forEach(f=>f(snapDoc(path)));}
-  function aplicar(path,data){if(data===null||data===undefined)delete cache[path];else cache[path]=data;avisar(path);}
+  function aplicar(path,data){if(data===null||data===undefined)delete cache[path];else cache[path]=data;avisar(path);salvarCache();}
+  function avisarTodos(){const cols=new Set(Object.keys(ouvCol));cols.forEach(col=>(ouvCol[col]||[]).forEach(f=>f(snapCol(col))));
+    Object.keys(ouvDoc).forEach(p=>ouvDoc[p].forEach(f=>f(snapDoc(p))));}
   return {
-    async _carregar(){let de=0;const passo=1000;
+    _tudo(){return cache;},
+    async _carregar(){let de=0;const passo=1000,novo={};
       for(;;){const {data,error}=await sb.from("docs").select("path,data").order("path").range(de,de+passo-1);if(error)throw error;
-        data.forEach(r=>{cache[r.path]=r.data;});if(data.length<passo)break;de+=passo;}},
+        data.forEach(r=>{novo[r.path]=r.data;});if(data.length<passo)break;de+=passo;}
+      Object.keys(cache).forEach(p=>{if(!(p in novo))delete cache[p];});Object.assign(cache,novo);avisarTodos();},
     _aoVivo(aoErro){sb.channel("docs-ao-vivo").on("postgres_changes",{event:"*",schema:"public",table:"docs"},pl=>{
         if(pl.eventType==="DELETE"){const p=pl.old&&pl.old.path;if(p)aplicar(p,null);}
         else if(pl.new&&pl.new.path)aplicar(pl.new.path,pl.new.data);
@@ -1293,7 +1294,7 @@ const traduzErro=e=>{const m=String((e&&e.message)||e||"");
 document.querySelectorAll("#loginForm [data-modo]").forEach(b=>b.addEventListener("click",()=>mostrarLogin(b.dataset.modo)));
 $("liSair").addEventListener("click",()=>sair());
 $("sair").addEventListener("click",()=>sair());
-async function sair(){try{await sb.auth.signOut();}catch(e){}location.reload();}
+async function sair(){limparCache();try{await sb.auth.signOut();}catch(e){}location.reload();}
 $("loginForm").addEventListener("submit",async e=>{e.preventDefault();
   const email=$("liEmail").value.trim().toLowerCase(),senha=$("liSenha").value,senha2=$("liSenha2").value;
   if(!$("lEmail").hidden&&!/^\S+@\S+\.\S+$/.test(email)){msgLogin("Informe um e-mail válido.","erro");return;}
@@ -1349,24 +1350,19 @@ $("importArq").addEventListener("change",async e=>{const f=e.target.files&&e.tar
 
 // ---------- início ----------
 function comPrazo(p,ms){return Promise.race([p,new Promise((_,rej)=>setTimeout(()=>rej(new Error("tempo esgotado")),ms))]);}
-async function iniciar(session){
-  if(!session||iniciado)return;iniciado=true;
-  mostrarLogin("carregando");
-  const email=(session.user&&session.user.email||"").toLowerCase();
-  let pap=null,error=null;
-  try{const r=await comPrazo(sb.rpc("meu_papel"),15000);pap=r.data;error=r.error;}catch(x){error={message:"tempo esgotado"};}
-  if(error){iniciado=false;}
-  if(error){mostrarLogin("sem","Não foi possível verificar o seu acesso. Recarregue a página. ("+error.message+")","erro");return;}
-  if(!pap){mostrarLogin("sem","O e-mail "+email+" ainda não tem acesso a este diário. Peça ao responsável pela obra para liberar e depois recarregue a página.");return;}
-  PAPEL=pap;LEITURA=PAPEL==="leitor";
-  $("usuEmail").textContent=email+" · "+({dono:"Dono",editor:"Editor",leitor:"Leitor"}[PAPEL]);$("usuario").hidden=false;
-  if(LEITURA){document.body.classList.add("leitura");$("somenteLeitura").hidden=false;}
-  if(PAPEL==="dono"){$("importArea").hidden=false;$("acPainel").hidden=false;carregarAcessos();}
-  esconderLogin();setStatus();render();
-  db=criarDb();
-  try{await db._carregar();}catch(x){db=null;$("semDb").hidden=false;$("status").textContent="Sem conexão com o banco";return;}
-  const erro=()=>{$("status").textContent="Conexão ao vivo perdida. Recarregue a página.";};
-  db._aoVivo(erro);
+// Dados guardados no aparelho: o site abre na hora e atualiza em segundo plano.
+const CACHE_KEY="diario-obra-cache-v1", AUTH_KEY="sb-vzubfeixrsjcpuqtlwqt-auth-token";
+let EMAIL="", aberto=false, cacheT=null;
+function lerCache(){try{return JSON.parse(localStorage.getItem(CACHE_KEY)||"null");}catch(e){return null;}}
+function limparCache(){clearTimeout(cacheT);try{localStorage.removeItem(CACHE_KEY);}catch(e){}}
+function salvarCache(){clearTimeout(cacheT);cacheT=setTimeout(()=>{try{if(db&&PAPEL&&EMAIL)localStorage.setItem(CACHE_KEY,JSON.stringify({email:EMAIL,papel:PAPEL,docs:db._tudo()}));}catch(e){}},1500);}
+function aplicarPapel(email,pap){EMAIL=email;PAPEL=pap;LEITURA=PAPEL==="leitor";
+  $("usuEmail").textContent=email+" · "+({dono:"Dono",editor:"Editor",leitor:"Leitor"}[PAPEL]||"");$("usuario").hidden=false;
+  document.body.classList.toggle("leitura",LEITURA);$("somenteLeitura").hidden=!LEITURA;
+  $("importArea").hidden=PAPEL!=="dono";$("acPainel").hidden=PAPEL!=="dono";
+  esconderLogin();setStatus();render();}
+const avisoQueda=()=>{$("status").textContent="Conexão ao vivo perdida. Recarregue a página.";};
+function abrir(inicial){if(aberto)return;aberto=true;db=criarDb(inicial);const erro=avisoQueda;
   db.collection("pessoas").onSnapshot(s=>{const o={};s.docs.forEach(d=>{known.add("pessoas/"+d.id);o[d.id]=Object.assign({},d.data(),{id:d.id});});S.pessoas=o;S.loaded.p=true;render();},erro);
   db.collection("meses").onSnapshot(s=>{const o={};s.docs.forEach(d=>{known.add("meses/"+d.id);o[d.id]=reaplicar("meses",d.id,d.data());});S.meses=o;S.loaded.m=true;render();},erro);
   db.collection("pagamentos").onSnapshot(s=>{const o={};s.docs.forEach(d=>{known.add("pagamentos/"+d.id);o[d.id]=reaplicar("pagamentos",d.id,d.data());});S.pags=o;S.loaded.g=true;render();},erro);
@@ -1374,11 +1370,36 @@ async function iniciar(session){
   db.collection("demandas").onSnapshot(s=>{const o={};s.docs.forEach(d=>{known.add("demandas/"+d.id);o[d.id]=Object.assign({},JSON.parse(JSON.stringify(d.data())),{id:d.id});});
     for(const id in demPend){if(o[id])merge(o[id],demPend[id]);}S.demandas=o;S.loaded.d=true;render();},erro);
   db.doc("obra/notas").onSnapshot(d=>{S.notas=d.exists?String((d.data()||{}).texto||""):"";if(document.activeElement!==$("notas")&&!notasT)$("notas").value=S.notas;},erro);
-  db.doc("obra/config").onSnapshot(d=>{if(d.exists){known.add("obra/config");S.config=Object.assign({},d.data());}render();},erro);
-  setStatus();
+  db.doc("obra/config").onSnapshot(d=>{if(d.exists){known.add("obra/config");S.config=Object.assign({},d.data());}render();},erro);}
+const OFFLINE="Sem conexão: mostrando os dados salvos neste aparelho";
+async function iniciar(session){
+  if(!session||iniciado)return;iniciado=true;
+  const email=(session.user&&session.user.email||"").toLowerCase();
+  if(aberto&&EMAIL!==email){limparCache();location.reload();return;}
+  if(!aberto){const c=lerCache();if(c&&c.email===email&&c.papel){aplicarPapel(email,c.papel);abrir(c.docs);$("status").textContent="Atualizando…";}else mostrarLogin("carregando");}
+  let pap=null,error=null;
+  try{const r=await comPrazo(sb.rpc("meu_papel"),15000);pap=r.data;error=r.error;}catch(x){error={message:"tempo esgotado"};}
+  if(error){if(aberto){$("status").textContent=OFFLINE;return;}iniciado=false;mostrarLogin("sem","Não foi possível verificar o seu acesso. Recarregue a página. ("+error.message+")","erro");return;}
+  if(!pap){limparCache();if(aberto){location.reload();return;}mostrarLogin("sem","O e-mail "+email+" ainda não tem acesso a este diário. Peça ao responsável pela obra para liberar e depois recarregue a página.");return;}
+  if(aberto&&PAPEL!==pap){limparCache();location.reload();return;}
+  const tinhaDados=aberto;
+  if(!aberto){aplicarPapel(email,pap);abrir(null);}
+  if(PAPEL==="dono")carregarAcessos();
+  try{await comPrazo(db._carregar(),30000);}
+  catch(x){if(tinhaDados){$("status").textContent=OFFLINE;}else{$("semDb").hidden=false;$("status").textContent="Sem conexão com o banco";}return;}
+  salvarCache();db._aoVivo(avisoQueda);setStatus();
 }
-(async()=>{
-  if(!window.supabase){mostrarLogin("sem","Não foi possível carregar o sistema. Verifique a internet e recarregue a página.","erro");return;}
+// PDF e Excel: carregados em segundo plano, só depois que o site abre
+let extrasP=null;
+function carregarExtras(){if(extrasP)return extrasP;
+  const um=src=>new Promise(ok=>{const t=document.createElement("script");t.src=src;t.onload=ok;t.onerror=ok;document.head.appendChild(t);});
+  extrasP=Promise.all([um("https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"),
+    um("https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js").then(()=>um("https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js"))]);
+  return extrasP;}
+// Abre na hora se já houver login e dados guardados neste aparelho
+try{const c=lerCache();if(c&&c.email&&c.papel&&localStorage.getItem(AUTH_KEY)){aplicarPapel(c.email,c.papel);abrir(c.docs);$("status").textContent="Atualizando…";}}catch(e){}
+function partida(){setTimeout(carregarExtras,1500);(async()=>{
+  if(!window.supabase){if(aberto){$("status").textContent=OFFLINE;return;}mostrarLogin("sem","Não foi possível carregar o sistema. Verifique a internet e recarregue a página.","erro");return;}
   sb=window.supabase.createClient(SUPA_URL,SUPA_KEY,{auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:true,lock:async(_n,_t,fn)=>await fn()}});
   let recuperando=/type=recovery/.test(location.hash);
   sb.auth.onAuthStateChange((ev,ses)=>{
@@ -1387,10 +1408,12 @@ async function iniciar(session){
   });
   let session=null;
   try{const r=await comPrazo(sb.auth.getSession(),10000);session=r&&r.data&&r.data.session;}
-  catch(x){if(!iniciado)mostrarLogin("entrar","A conexão demorou para responder. Entre com seu e-mail e senha.","erro");return;}
+  catch(x){if(aberto){$("status").textContent=OFFLINE;return;}if(!iniciado)mostrarLogin("entrar","A conexão demorou para responder. Entre com seu e-mail e senha.","erro");return;}
   if(recuperando)return;
-  if(session)iniciar(session);else if(!iniciado)mostrarLogin("entrar");
-})();
+  if(session)iniciar(session);
+  else{if(aberto){limparCache();location.reload();return;}if(!iniciado)mostrarLogin("entrar");}
+})();}
+if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",partida);else partida();
 })();
 </script>
 
